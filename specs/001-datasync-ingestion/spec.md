@@ -85,7 +85,7 @@ The system respects all API rate limits across all endpoints. When rate-limited,
 ### Functional Requirements
 
 - **FR-001**: System MUST extract all 3,000,000 events from the DataSync Analytics API and store them in PostgreSQL.
-- **FR-002**: System MUST use the high-throughput stream endpoint as the primary data access path, falling back to standard pagination if the stream is unavailable.
+- **FR-002**: System MUST use the high-throughput stream endpoint as the primary data access path. On transient stream errors (network, single 5xx), retry up to 3 times before falling back to standard pagination. On persistent failure (repeated token acquisition failure, repeated 403), fall back to standard pagination and periodically re-attempt stream acquisition.
 - **FR-003**: System MUST obtain and auto-refresh stream access tokens before expiry (300-second TTL).
 - **FR-004**: System MUST normalize all event timestamps to a consistent format (epoch milliseconds) regardless of source format (epoch ms or ISO string).
 - **FR-005**: System MUST persist ingestion progress (cursor position, event count) to the database at regular intervals for crash recovery.
@@ -95,7 +95,7 @@ The system respects all API rate limits across all endpoints. When rate-limited,
 - **FR-009**: System MUST run entirely within Docker containers orchestrated by `docker-compose.yml`.
 - **FR-010**: System MUST start via `sh run-ingestion.sh` with no manual intervention or configuration changes.
 - **FR-011**: System MUST use batch database writes (multi-row inserts) for throughput optimization.
-- **FR-012**: System MUST handle API chaos injection (missing fields, malformed data) without crashing.
+- **FR-012**: System MUST handle API chaos injection (missing fields, malformed data) without crashing. Events with missing non-critical fields are stored with nulls. Events missing `id` are skipped and logged as errors.
 - **FR-013**: System MUST provide structured log output showing ingestion progress at regular intervals.
 - **FR-014**: System MUST implement a container health check that reports liveness based on recent successful activity.
 - **FR-015**: System MUST handle database connection failures with retry logic.
@@ -116,6 +116,13 @@ The system respects all API rate limits across all endpoints. When rate-limited,
 - **SC-004**: Progress logs appear at least every 30 seconds during active ingestion, showing current count and throughput.
 - **SC-005**: No API rate limit violations (zero HTTP 429 responses) under normal operation with the stream endpoint.
 - **SC-006**: System completes end-to-end ingestion via `sh run-ingestion.sh` with zero manual intervention on a clean Linux machine.
+
+## Clarifications
+
+### Session 2026-02-21
+
+- Q: How should chaos-injected events with missing fields affect the 3M target? → A: Store all events (ID is expected to always be present per observed API behavior). If an event lacks an `id`, skip it, log the error, and continue. The 3M target assumes all events have IDs; final count may be slightly less only if truly malformed records are encountered.
+- Q: What triggers stream-to-standard fallback and does the system recover? → A: Smart fallback — retry stream on transient errors (3 attempts), fall back to standard pagination on persistent failure (repeated token/403), and periodically re-attempt stream acquisition.
 
 ## Assumptions
 

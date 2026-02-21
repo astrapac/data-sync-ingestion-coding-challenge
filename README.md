@@ -1,220 +1,220 @@
-## Overview
+# DataSync Ingestion Solution
 
-Build a production-ready data ingestion system that extracts event data from the DataSync Analytics API and stores it in a PostgreSQL database.
-
-## Requirements
-
-Your solution must:
-
-1. Run entirely in Docker using the provided `docker-compose.yml`
-2. Work with the command: `sh run-ingestion.sh`
-**Tools Policy:**
-- **Allowed:** Any AI coding tools or development tools during development
-- **Solution constraint:** Your final solution must run entirely in Docker without requiring external API keys or 3rd party services
-
-
-If you use AI tools, please document which ones and how they helped in your solution's README.
-
-## The Challenge
-
-DataSync Analytics is a live application with:
-- **Dashboard:** http://datasync-dev-alb-101078500.us-east-1.elb.amazonaws.com (explore the UI!)
-- **API:** http://datasync-dev-alb-101078500.us-east-1.elb.amazonaws.com/api/v1
-
-Your task is to:
-
-1. **Connect** to the DataSync API
-2. **Extract** ALL events from the system (3,000,000)
-3. **Handle** the API's pagination correctly
-4. **Respect** rate limits
-5. **Store** data in PostgreSQL
-7. **Make it resumable** (save progress, resume after failure)
-
-### Important Notes
-
-- The API documentation is minimal by design
-- Part of this challenge is **discovering** how the API works
-- Pay attention to response headers and data formats
-- The API has behaviors that aren't documented
-- Timestamp formats may vary across responses - normalize carefully
-
-## Getting Started
-
-### Prerequisites
-
-- Docker and Docker Compose
-- Node.js 20+
-- npm or yarn
-
-### Your Workspace
-
-Use this directory as your workspace. A `docker-compose.yml` is provided with PostgreSQL for your solution.
+## How to Run
 
 ```bash
-docker compose up -d
+# One command — builds, starts, and monitors until completion:
+sh run-ingestion.sh
 ```
 
-This gives you:
-- PostgreSQL at `localhost:5434`
+**Prerequisites:** Docker and Docker Compose installed. Nothing else.
 
-### Exploring the Application
+The script:
+1. Builds the TypeScript ingestion service in a multi-stage Docker image
+2. Starts PostgreSQL 16 + the ingestion container
+3. Polls `ingested_events` count every 5 seconds
+4. Exits when container logs `"ingestion complete"`
 
-**Dashboard:** http://datasync-dev-alb-101078500.us-east-1.elb.amazonaws.com
-- Browse the dashboard to understand the data model
-- Curious developers explore everything...
+### Manual Commands
 
-**API Base URL:** `http://datasync-dev-alb-101078500.us-east-1.elb.amazonaws.com/api/v1`
-
-**API Key:** You should have received a unique API key from your interviewer.
-
-> **Important:** Your API key is valid for **3 hours from first use**. The timer starts when you make your first API call. Plan your work accordingly.
-
-**API Documentation:** http://datasync-dev-alb-101078500.us-east-1.elb.amazonaws.com/docs/api.md
-
-## Requirements
-
-### Must Have
-
-1. **TypeScript** codebase
-2. **PostgreSQL** for data storage
-3. **Docker Compose** for running your solution
-4. **Proper error handling** and logging
-5. **Rate limit handling** - respect the API limits
-6. **Resumable ingestion** - if the process crashes, it should resume from where it left off
-
-### Should Have
-
-1. **Throughput optimization** - maximize events per second
-2. **Progress tracking** - show ingestion progress
-3. **Health checks** - monitor worker health
-
-### Nice to Have
-
-1. **Unit tests**
-2. **Integration tests**
-3. **Metrics/monitoring**
-4. **Architecture documentation**
-
-## Submitting Your Results
-
-Once you've ingested all events, submit your results to verify completion.
-
-### Step 1: Push Your Solution to GitHub
-
-Before submitting, push your solution to a GitHub repository. This allows us to review your code and see your commit history/progress.
-
-### Step 2: Submit via API
-
-**POST** `http://datasync-dev-alb-101078500.us-east-1.elb.amazonaws.com/api/v1/submissions`
-
-Submit a file containing all event IDs (one per line) along with your GitHub repo URL.
-
-**Headers:**
-- `X-API-Key`: Your API key
-- `Content-Type`: `text/plain` or `application/json`
-
-**Option 1: Plain text with query param (recommended)**
 ```bash
-curl -X POST \
-  -H "X-API-Key: YOUR_API_KEY" \
-  -H "Content-Type: text/plain" \
-  --data-binary @event_ids.txt \
-  "http://datasync-dev-alb-101078500.us-east-1.elb.amazonaws.com/api/v1/submissions?github_repo=https://github.com/yourusername/your-repo"
+# Start services manually
+docker compose up -d --build
+
+# Check progress
+docker exec assignment-postgres psql -U postgres -d ingestion -t -c "SELECT COUNT(*) FROM ingested_events;"
+
+# View logs
+docker logs -f assignment-ingestion
+
+# Export event IDs for submission
+docker exec assignment-postgres psql -U postgres -d ingestion -t -A \
+  -c "SELECT id FROM ingested_events ORDER BY id;" > event_ids.txt
 ```
 
-**Option 2: JSON**
-```bash
-curl -X POST \
-  -H "X-API-Key: YOUR_API_KEY" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "ids": "id1\nid2\nid3",
-    "githubRepoUrl": "https://github.com/yourusername/your-repo"
-  }' \
-  http://datasync-dev-alb-101078500.us-east-1.elb.amazonaws.com/api/v1/submissions
+### Configuration
+
+Set environment variables in `docker-compose.yml` or `.env`:
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `API_KEY` | — | **Required.** Your DataSync API key |
+| `API_BASE_URL` | `http://datasync-dev-alb-...` | API root URL |
+| `DATABASE_URL` | `postgresql://postgres:postgres@postgres:5432/ingestion` | PostgreSQL connection |
+| `BATCH_SIZE` | `5000` | Events per API page (max supported by API) |
+
+---
+
+## Architecture Overview
+
+### High-Level Flow
+
+```
+                    ┌──────────────────────────────┐
+                    │         index.ts              │
+                    │  Bootstrap, resume check,     │
+                    │  orchestrate lifecycle        │
+                    └──────────┬───────────────────┘
+                               │
+                    ┌──────────▼───────────────────┐
+                    │       pipeline.ts             │
+                    │  Dual-path fetch loop with    │
+                    │  prefetch + in-flight inserts  │
+                    └──┬────────────────────────┬──┘
+                       │                        │
+          ┌────────────▼──────┐    ┌────────────▼──────┐
+          │  stream-client.ts │    │ standard-client.ts │
+          │  Fast path (no    │    │ Fallback path      │
+          │  rate limit)      │    │ (rate-limited)     │
+          └───────────────────┘    └───────────────────┘
+                       │                        │
+                    ┌──▼────────────────────────▼──┐
+                    │           db.ts               │
+                    │  COPY streaming, checkpoints, │
+                    │  dedup, finalization           │
+                    └──────────────────────────────┘
 ```
 
-**Response:**
-```json
-{
-  "success": true,
-  "data": {
-    "submissionId": "uuid",
-    "eventCount": 3000000,
-    "githubRepoUrl": "https://github.com/yourusername/your-repo",
-    "submittedAt": "2024-01-15T10:30:00.000Z",
-    "timeToSubmit": {
-      "ms": 1234567,
-      "seconds": 1235,
-      "minutes": 20.6,
-      "formatted": "20m 35s"
-    },
-    "submissionNumber": 1,
-    "remainingSubmissions": 4
-  },
-  "message": "Submission #1 received with 3,000,000 event IDs. 4 submissions remaining."
-}
-```
+### Key Design Decisions
 
-**Limits:**
-- Maximum **5 submissions** per API key
-- The response includes your completion time (from first API call to submission)
+**1. Dual-Path Resilience (stream + standard)**
 
-**Check your submissions:**
-```bash
-curl -H "X-API-Key: YOUR_API_KEY" \
-  http://datasync-dev-alb-101078500.us-east-1.elb.amazonaws.com/api/v1/submissions
-```
+The pipeline starts on the undocumented stream endpoint (no rate limit). If it fails (429, token expiry, network errors), it falls back to the standard `/api/v1/events` endpoint. While on standard, it periodically re-attempts stream token acquisition and switches back when available. This self-healing happens automatically with zero manual intervention.
 
-## Important: Verification Testing
+**2. PostgreSQL COPY Protocol**
 
-**Your solution will be tested after submission to verify it works correctly.**
+Bulk inserts use `pg-copy-streams` with tab-delimited COPY — 10x+ faster than individual INSERT statements. Events are written as raw COPY lines, avoiding ORM overhead entirely.
 
-- The full ingestion must work when running `sh run-ingestion.sh` from scratch on a clean Linux machine using Docker
-- We will run your solution on a fresh environment with only Docker installed
-- The following do NOT count as valid solutions:
-  - WIP/incomplete code that requires manual intervention
-  - Solutions that require manual pauses or human interaction during execution
-  - Code that needs to be modified after starting the ingestion
-  - Solutions that only work after multiple manual restarts
+**3. UNLOGGED Table During Load**
 
-Your solution must be fully automated and complete the entire ingestion without any manual steps.
+The `ingested_events` table is created as UNLOGGED (no WAL overhead) during bulk ingestion. After all events are loaded, finalization converts it to LOGGED for durability. This significantly reduces I/O during the write-heavy phase.
 
-## What to Submit
+**4. Checkpoint-Based Resumability**
 
-Your solution should include:
+After every batch drain (4 pages), the pipeline persists a checkpoint with cursor position, event count, and last event timestamp. On crash/restart, it resumes from the checkpoint using the `since` timestamp parameter (offset by -1ms to catch boundary events). Deduplication handles any overlap.
 
-1. All source code in the `packages/` directory
-2. Updated `docker-compose.yml` if needed
-3. `README.md` with:
-   - How to run your solution
-   - Architecture overview
-   - Any discoveries about the API
-   - What you would improve with more time
+**5. Prefetch Pipelining**
 
-## Evaluation Criteria
+While the database drains in-flight inserts, the next API page is fetched concurrently. This overlaps network I/O with database I/O, reducing idle time on both sides.
 
-| Category | Weight |
-|----------|--------|
-| API Discovery & Throughput | 60% |
-| Job Processing Architecture | 40% |
+**6. Post-Load Deduplication**
 
-**Your score is primarily based on throughput** - how many events per minute can your solution ingest?
+Rather than checking for duplicates during ingestion (which would add per-row overhead), duplicates are resolved in a single pass after all events are loaded using PostgreSQL's `DISTINCT ON (id)` into a temp table, keeping the row with the latest timestamp.
 
-> **Challenge yourself:** Top candidates have solved this entire challenge - including ingesting all 3M events - in under 30 minutes. If you feel limited by the API, keep pushing. There's always a faster way.
+### Source Files
 
-## Tips
+| File | Purpose |
+|------|---------|
+| `src/index.ts` | Entry point: bootstrap, resume detection, finalization |
+| `src/pipeline.ts` | Main fetch-insert orchestrator with dual-path switching |
+| `src/stream-client.ts` | Stream token management + fast-path fetcher |
+| `src/standard-client.ts` | Rate-limit-aware standard API client |
+| `src/db.ts` | COPY streaming, checkpoints, dedup, finalization |
+| `src/config.ts` | Environment-based configuration |
+| `src/health.ts` | Docker HEALTHCHECK liveness signal |
+| `src/types.ts` | Shared TypeScript interfaces |
 
-- Start by exploring the API thoroughly - this is critical
-- Make requests, look at responses, **check headers carefully**
-- The documented API may not be the fastest way...
-- Think about failure scenarios - what happens if the process crashes mid-ingestion?
-- Consider how to **maximize throughput** while respecting rate limits
-- Good engineers explore every corner of an application
-- Cursors have a lifecycle - don't let them get stale
+---
 
-## Questions?
+## API Discoveries
 
-If something is unclear about the requirements (not the API!), please reach out to your contact.
+### Undocumented Stream Endpoint (The Fast Path)
 
-Good luck!
+The dashboard's JavaScript bundle revealed an undocumented high-throughput endpoint:
+
+1. **Token acquisition:** `POST /internal/dashboard/stream-access` — requires `Origin` header matching the ALB URL and a browser-like `User-Agent`
+2. **Stream endpoint:** `GET /api/v1/events/d4ta/x7k9/feed` — requires `X-API-Key` + `X-Stream-Token` headers
+3. **No rate limit** on the stream endpoint (vs 10 req/30s on standard)
+4. **Token expires in 300 seconds** — must refresh proactively
+
+### Other Undocumented Endpoints
+
+| Endpoint | Notes |
+|----------|-------|
+| `/api/v1/sessions` | 60,000 sessions, 40 req/60s rate limit |
+| `/api/v1/events/bulk` | POST with `{ ids: [...] }`, max 100 IDs, 20 req/60s |
+| `/internal/stats` | Returns counts: 3M events, 60K sessions, 3K users |
+| `/internal/health` | DB + Redis status |
+
+### Timestamp Format Inconsistency
+
+The standard events endpoint returns **mixed formats** — some as epoch milliseconds (`1769541612369`), some as ISO strings (`"2026-01-27T19:19:13.629Z"`). The stream endpoint consistently returns epoch milliseconds. The pipeline normalizes all formats in `normalizeTimestamp()`.
+
+### Chaos Headers
+
+The stream endpoint returns `X-Chaos-Applied` and `X-Chaos-Description` headers, suggesting the API may inject chaos (missing fields, malformed data). The pipeline skips events with missing IDs or invalid timestamps.
+
+### Rate Limits by Endpoint
+
+| Endpoint | Limit | Window |
+|----------|-------|--------|
+| `/api/v1/events` | 10 requests | ~30s |
+| `/api/v1/sessions` | 40 requests | ~60s |
+| `/api/v1/events/bulk` | 20 requests | ~60s |
+| Stream feed | **None observed** | — |
+
+### Key Numbers
+
+| Metric | Value |
+|--------|-------|
+| Total events | 3,000,000 |
+| Total sessions | 60,000 |
+| Total users | 3,000 |
+| Max events per page | 5,000 (API caps at 5K regardless of request) |
+| Cursor TTL | ~116-120 seconds |
+| Stream token TTL | 300 seconds |
+
+---
+
+## What I Would Improve With More Time
+
+### 1. Parallel Time-Range Partitioned Fetching (3-5x throughput)
+
+The stream endpoint supports `since` and `until` timestamp filters. Instead of one serial cursor walking 3M events, partition the time range into N non-overlapping windows and run N concurrent workers, each with its own stream token and cursor chain. This is the single biggest performance multiplier available.
+
+### 2. Producer-Consumer Decoupling (2-3x throughput)
+
+Replace the current coupled fetch-then-insert loop with a bounded async queue. A producer fills the buffer with fetched pages; consumers drain it via parallel COPY streams. Network is never idle while DB writes, and vice versa.
+
+### 3. Aggressive PostgreSQL Tuning
+
+The current PG config is conservative. For a disposable container doing pure bulk load:
+- `fsync=off` — no disk sync needed
+- `full_page_writes=off` — skip full-page WAL images
+- `autovacuum=off` — no background vacuum
+- `wal_level=minimal` — minimal WAL detail
+- `maintenance_work_mem=1GB` — faster PK index creation
+
+### 4. HTTP Compression
+
+Add `Accept-Encoding: gzip` headers. Currently ~1GB of uncompressed JSON is transferred. With gzip, this drops to ~150-200MB — a 30-80% reduction in network I/O.
+
+### 5. In-Memory Dedup
+
+Maintain a `Set<string>` of seen event IDs in Node.js (3M UUIDs ~ 108MB heap). Skip duplicates before they hit the database, eliminating the post-load dedup pass entirely.
+
+### 6. Remove Stream Self-Throttle
+
+The stream client currently enforces a 6-second minimum interval between requests (`MIN_REQUEST_INTERVAL_MS`). This was added conservatively but the stream endpoint has no observed rate limit. Removing or reducing this would immediately increase throughput.
+
+### 7. Unit & Integration Tests
+
+Add test coverage for:
+- Timestamp normalization edge cases
+- COPY stream escaping (current `esc()` only covers `properties`, not all fields)
+- Stream/standard failover logic
+- Checkpoint resume scenarios
+
+### 8. Metrics & Monitoring
+
+Add structured metrics (events/sec, error rates, DB insert latency) exposed via a `/metrics` endpoint for Prometheus scraping or a lightweight dashboard.
+
+---
+
+## AI Tools Used
+
+This solution was developed with assistance from **Claude Code** (Anthropic's CLI tool), which helped with:
+- API endpoint discovery and reverse-engineering the dashboard JS bundle
+- Architecture design and optimization strategy analysis
+- Code implementation and debugging
+- Performance profiling and bottleneck identification

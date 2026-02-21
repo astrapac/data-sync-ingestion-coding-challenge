@@ -77,3 +77,10 @@ docker logs -f assignment-ingestion
 5. **Fully automated** — no manual intervention, must work on a clean Linux machine with only Docker installed
 6. **Cursors have a lifecycle** — don't let them get stale
 7. The documented API may not be the fastest path — explore alternatives
+
+## Active Technologies
+- TypeScript 5.3+ on Node.js 20 (Alpine) + `pg` (PostgreSQL client), Node.js built-in `fetch` (undici under the hood) (001-datasync-ingestion)
+- PostgreSQL 16 (provided via docker-compose) (001-datasync-ingestion)
+
+## Recent Changes
+- 001-datasync-ingestion: Added TypeScript 5.3+ on Node.js 20 (Alpine) + `pg` (PostgreSQL client), Node.js built-in `fetch` (undici under the hood)

@@ -213,8 +213,14 @@ Add structured metrics (events/sec, error rates, DB insert latency) exposed via 
 
 ## AI Tools Used
 
-This solution was developed with assistance from **Claude Code** (Anthropic's CLI tool), which helped with:
+This solution was developed with assistance from:
+
+- **Claude Code** (Anthropic's CLI tool) — primary development environment for code implementation, debugging, and iterative development
+- **Claude Code Agents** — specialized sub-agents (performance-engineer, database-optimizer, data-engineer, code-reviewer) for parallel analysis of optimization strategies, API discovery, and architecture review
+- **SpecKit** — specification-driven workflow tooling for structured planning, task generation, and cross-artifact consistency analysis
+
+Key areas where AI tooling accelerated development:
 - API endpoint discovery and reverse-engineering the dashboard JS bundle
 - Architecture design and optimization strategy analysis
-- Code implementation and debugging
-- Performance profiling and bottleneck identification
+- Code implementation, debugging, and performance profiling
+- Structured planning with dependency-ordered task breakdown

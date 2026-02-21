@@ -6,6 +6,16 @@ services:
   postgres:
     image: postgres:16-alpine
     container_name: assignment-postgres
+    command: >
+      postgres
+      -c shared_buffers=256MB
+      -c work_mem=64MB
+      -c maintenance_work_mem=256MB
+      -c synchronous_commit=off
+      -c wal_buffers=16MB
+      -c checkpoint_completion_target=0.9
+      -c max_wal_size=2GB
+      -c effective_cache_size=512MB
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
@@ -14,6 +24,7 @@ services:
       - "5434:5432"
     volumes:
       - assignment_postgres_data:/var/lib/postgresql/data
+    shm_size: 256mb
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres"]
       interval: 5s
@@ -22,22 +33,18 @@ services:
     networks:
       - assignment-network
 
-  # Add your ingestion service(s) here
-  # Example:
-  #
-  # ingestion:
-  #   build: ./packages/ingestion
-  #   container_name: assignment-ingestion
-  #   environment:
-  #     DATABASE_URL: postgresql://postgres:postgres@postgres:5432/ingestion
-  #     API_BASE_URL: https://datasync-api.example.com
-  #     TARGET_API_KEY: your_api_key_here
-  #     # Note: Use header-based auth (X-API-Key header) for best rate limits
-  #   depends_on:
-  #     postgres:
-  #       condition: service_healthy
-  #   networks:
-  #     - assignment-network
+  ingestion:
+    build: ./packages/ingestion
+    container_name: assignment-ingestion
+    environment:
+      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/ingestion
+      API_BASE_URL: http://datasync-dev-alb-101078500.us-east-1.elb.amazonaws.com
+      API_KEY: ds_937fd9895b6e98eaf3bb5ec6ffc36e8c
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - assignment-network
 
 volumes:
   assignment_postgres_data:
